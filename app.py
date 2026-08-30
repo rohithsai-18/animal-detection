@@ -1,6 +1,7 @@
 """
-🐾 Animal Intrusion Detection AI - 24/7 Streamlit Cloud Web Application
-Mobile & Desktop friendly. Allows farmers, clients, and friends to identify animals in fields.
+🐾 Animal & Human Intrusion Detection AI - 24/7 Streamlit Cloud Web Application
+Supports all 80 real-world classes (Humans, Wildlife, Livestock, and Farm Animals).
+Powered by YOLO11 & ONNX Runtime.
 """
 
 import os
@@ -16,13 +17,12 @@ import streamlit as st
 # 1. PAGE CONFIG & STYLING
 # ==============================================================================
 st.set_page_config(
-    page_title="Animal Intrusion Detection AI",
+    page_title="Animal & Intruder Detection AI",
     page_icon="🐾",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for polished, mobile-friendly card styling
 st.markdown("""
 <style>
     .main-title { font-size: 2.2rem; font-weight: 700; color: #1e293b; margin-bottom: 0.2rem; }
@@ -33,7 +33,22 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 MODEL_PATH = "best.onnx"
-DEFAULT_CLASSES = ["buffalo", "elephant", "rhino", "zebra", "deer", "wild_boar", "monkey", "cow", "human"]
+
+# Full 80 COCO Pre-trained Classes (Humans, Wildlife, Livestock, Birds, Vehicles, etc.)
+COCO_80_CLASSES = [
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
+    "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
+    "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
+    "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
+    "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
+    "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
+    "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse",
+    "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator",
+    "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
+]
+
+# Distinct colors for bounding boxes
 CLASS_COLORS = [
     (235, 120, 30),   # Orange
     (30, 30, 220),    # Red
@@ -41,11 +56,13 @@ CLASS_COLORS = [
     (50, 180, 50),    # Green
     (200, 200, 30),   # Yellow
     (180, 50, 200),   # Purple
+    (30, 180, 200),   # Cyan
+    (200, 100, 150),  # Pink
 ]
 
 
 # ==============================================================================
-# 2. MODEL LOADER (CACHED FOR INSTANT SPEED)
+# 2. CACHED ONNX MODEL LOADER
 # ==============================================================================
 @st.cache_resource
 def load_onnx_model():
@@ -72,7 +89,7 @@ def load_onnx_model():
 # 3. PREPROCESSING & POSTPROCESSING
 # ==============================================================================
 def letterbox(im: np.ndarray, new_shape: Tuple[int, int] = (640, 640)):
-    """Resize & pad image preserving aspect ratio."""
+    """Resize & pad image while preserving aspect ratio."""
     shape = im.shape[:2]
     r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
     new_unpad = (int(round(shape[1] * r)), int(round(shape[0] * r)))
@@ -86,15 +103,18 @@ def letterbox(im: np.ndarray, new_shape: Tuple[int, int] = (640, 640)):
 
 
 def decode_yolo_onnx(output_tensor, conf_threshold, iou_threshold, original_shape, ratio, pad):
-    """Parses raw YOLO11/YOLOv8 ONNX tensor and applies NMS."""
+    """Decodes raw YOLO11 ONNX tensor (1, 84, 8400) and applies class-aware NMS."""
     preds = np.squeeze(output_tensor)
     if preds.ndim != 2:
         return []
+
+    # Transpose from (C, 8400) to (8400, C)
     if preds.shape[0] < preds.shape[1] and preds.shape[0] <= 100:
         preds = preds.transpose()
 
     boxes_cxcywh = preds[:, :4]
     class_scores = preds[:, 4:]
+
     class_ids = np.argmax(class_scores, axis=1)
     confidences = np.max(class_scores, axis=1)
 
@@ -147,43 +167,56 @@ def decode_yolo_onnx(output_tensor, conf_threshold, iou_threshold, original_shap
 # ==============================================================================
 # 4. STREAMLIT USER INTERFACE
 # ==============================================================================
-st.markdown('<div class="main-title">🐾 Animal Intrusion Detection AI</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Real-time wildlife identification & automated intrusion warning alerts.</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">🐾 Animal & Human Intrusion Detection AI</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Real-time identification of wildlife, farm livestock, and humans with automated intrusion alerts.</div>', unsafe_allow_html=True)
 
-# Sidebar settings
+# Sidebar controls
 with st.sidebar:
     st.header("⚙️ Detection Controls")
-    conf_thresh = st.slider("Confidence Sensitivity", min_value=0.10, max_value=0.95, value=0.25, step=0.05,
-                            help="Lower values detect distant animals; higher values require strong certainty.")
-    
-    target_intruders = st.multiselect(
-        "🚨 High-Threat Intruder Animals (Trigger Red Alert):",
-        options=["Elephant", "Wild_Boar", "Buffalo", "Rhino", "Zebra", "Deer", "Monkey", "Cow", "Human"],
-        default=["Elephant", "Wild_Boar", "Buffalo", "Rhino"]
+    conf_thresh = st.slider(
+        "Detection Sensitivity (Confidence)",
+        min_value=0.10,
+        max_value=0.95,
+        value=0.25,
+        step=0.05,
+        help="Lower values detect distant animals; higher values require strong certainty."
     )
-    
-    st.markdown("---")
-    st.markdown("💡 **Tip**: On mobile phones, choose *'Take Live Camera Photo'* to snap photos directly from the field.")
 
-# Input options
-input_mode = st.radio("Choose How to Input Image:", ["📁 Upload Photo from Device", "📸 Take Photo with Camera"], horizontal=True)
+    st.markdown("---")
+    st.subheader("🚨 Target Threat Species")
+    st.write("Select which detected objects should trigger a **Red Intrusion Alert**:")
+
+    # Grouped common target intruders
+    common_targets = ["person", "elephant", "cow", "horse", "bear", "sheep", "dog", "bird", "zebra"]
+    selected_intruders = st.multiselect(
+        "Intruder Alert Checklist:",
+        options=common_targets + [c for c in COCO_80_CLASSES if c not in common_targets],
+        default=["person", "elephant", "cow", "bear", "dog"],
+        help="Any detected species in this list will flash a critical Red Alert banner."
+    )
+
+    st.markdown("---")
+    st.caption("💡 **Tip**: Choose *'Take Photo with Camera'* to snap live pictures directly from fields or farms.")
+
+# Input mode
+input_mode = st.radio("Choose Input Method:", ["📁 Upload Photo from Device", "📸 Take Photo with Camera"], horizontal=True)
 
 image_input = None
 if input_mode == "📁 Upload Photo from Device":
-    uploaded = st.file_uploader("Upload an animal photo (JPG, PNG, JPEG)", type=["jpg", "jpeg", "png"])
+    uploaded = st.file_uploader("Upload an image (JPG, PNG, JPEG)", type=["jpg", "jpeg", "png"])
     if uploaded:
         image_input = Image.open(uploaded).convert("RGB")
 else:
-    captured = st.camera_input("Snap a photo of the animal...")
+    captured = st.camera_input("Snap a live photo...")
     if captured:
         image_input = Image.open(captured).convert("RGB")
 
 # Run Detection
 if image_input is not None:
     session, input_name, output_name = load_onnx_model()
-    
+
     if session is None:
-        st.error("⚠️ Model file `best.onnx` not found in this repository. Please make sure `best.onnx` is uploaded.")
+        st.error("⚠️ Model file `best.onnx` not found. Please make sure `best.onnx` is uploaded to the repository.")
     else:
         img_np = np.array(image_input)
         orig_h, orig_w = img_np.shape[:2]
@@ -202,7 +235,7 @@ if image_input is not None:
         # 3. Postprocess
         detections = decode_yolo_onnx(outputs[0], conf_thresh, 0.45, (orig_h, orig_w), ratio, pad)
 
-        # 4. Annotate
+        # 4. Annotate image
         annotated = img_np.copy()
         has_intrusion = False
         threat_list = []
@@ -212,23 +245,24 @@ if image_input is not None:
             x1, y1, x2, y2 = det["box"]
             cid = det["class_id"]
             conf = det["confidence"]
-            cname = DEFAULT_CLASSES[cid] if 0 <= cid < len(DEFAULT_CLASSES) else f"class_{cid}"
-            
+            cname = COCO_80_CLASSES[cid] if 0 <= cid < len(COCO_80_CLASSES) else f"class_{cid}"
+
             species_counts[cname] = species_counts.get(cname, 0) + 1
-            is_threat = cname.capitalize() in target_intruders
+            is_threat = cname.lower() in [s.lower() for s in selected_intruders]
 
             if is_threat:
                 has_intrusion = True
                 threat_list.append(f"{cname.upper()} ({conf * 100:.1f}%)")
-                color = (220, 20, 20)  # Red Alert
+                color = (220, 20, 20)  # Red alert
                 box_thickness = 3
             else:
                 color = CLASS_COLORS[cid % len(CLASS_COLORS)]
                 box_thickness = 2
 
+            # Draw bounding box
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color, box_thickness)
-            label = f"⚠️ {cname.upper()} {conf*100:.1f}%" if is_threat else f"{cname} {conf*100:.1f}%"
-            
+            label = f"⚠️ {cname.upper()} {conf*100:.1f}%" if is_threat else f"{cname.capitalize()} {conf*100:.1f}%"
+
             font = cv2.FONT_HERSHEY_SIMPLEX
             (tw, th), bl = cv2.getTextSize(label, font, 0.55, 1)
             cv2.rectangle(annotated, (x1, max(0, y1 - th - bl - 4)), (min(orig_w, x1 + tw + 6), y1), color, -1)
@@ -242,21 +276,22 @@ if image_input is not None:
 
         with col_info:
             if has_intrusion:
-                st.error(f"🚨 **INTRUSION ALERT CONFIRMED!**\n\n**Threat Species:** {', '.join(threat_list)}")
+                st.error(f"🚨 **INTRUSION ALERT CONFIRMED!**\n\n**Detected Threats:** {', '.join(set(threat_list))}")
             elif len(detections) > 0:
-                st.success("✅ **Animals Detected (Safe / Non-Intruder)**")
+                st.success("✅ **Detected (Safe / Non-Intruder)**")
             else:
-                st.info("🔍 **No Animals Detected.** Try lowering the sensitivity slider on the left.")
+                st.info("🔍 **No Objects or Animals Detected.** Try lowering the sensitivity slider in the sidebar.")
 
-            st.markdown("### 📊 Detection Summary")
+            st.markdown("### 📊 Detection Telemetry")
             m1, m2 = st.columns(2)
-            m1.metric("Inference Time", f"{latency_ms:.1f} ms")
-            m2.metric("Total Animals", len(detections))
+            m1.metric("Inference Latency", f"{latency_ms:.1f} ms")
+            m2.metric("Total Detected", len(detections))
 
             if species_counts:
-                st.markdown("**Spotted Species Breakdown:**")
+                st.markdown("**Identified Breakdown:**")
                 for sp, count in species_counts.items():
-                    st.write(f"- 🐾 **{sp.capitalize()}**: `{count} detected`")
+                    emoji = "👤" if sp == "person" else "🐾"
+                    st.write(f"- {emoji} **{sp.capitalize()}**: `{count} found`")
 
 st.markdown("---")
-st.caption("Animal Intrusion Detection AI • Hosted 24/7 on Streamlit Cloud • Powered by YOLO11 & ONNX Runtime")
+st.caption("Animal & Human Intrusion Detection AI • Hosted 24/7 on Streamlit Cloud • Powered by YOLO11 & ONNX Runtime")
